@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lluvia de Corazones y Fotos</title>
+    <!-- Google Font: Playfair Display for the overlay text -->
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Ensure body and html take full height and width, remove default margins/padding */
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrollbars due to canvas */
+            height: 100%;
+            width: 100%;
+            background-color: #1a1a2e; /* Dark background to make hearts and photos pop */
+        }
+        /* Canvas styling to cover the entire screen and be positioned absolutely */
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* Ensure canvas fills the entire viewport */
+            width: 100%;
+            height: 100%;
+        }
+        /* Custom style for the overlay text, applying the Playfair Display font and a pink glow */
+        .overlay-text {
+            font-family: 'Playfair Display', serif;
+            color: #fff; /* White text */
+            text-shadow: 0 0 20px rgba(255, 105, 180, 0.9), /* Stronger pink glow */
+                         0 0 35px rgba(255, 105, 180, 0.7),
+                         0 0 50px rgba(255, 105, 180, 0.5);
+        }
+    </style>
+</head>
+<body class="bg-[#1a1a2e]">
+    <!-- The lienzo donde se dibujará la animación -->
+    <canvas id="heartsCanvas"></canvas>
+
+    <!-- Contenedor para el texto superpuesto, centrado con Flexbox y Tailwind CSS -->
+    <!-- pointer-events-none ensures clicks/touches pass through to the canvas below -->
+    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <h1 class="text-white text-5xl md:text-7xl text-center overlay-text">
+            mi chikita bb
+        </h1>
+    </div>
+
+    <script>
+        // --- Canvas Setup ---
+        const canvas = document.getElementById('heartsCanvas');
+        const ctx = canvas.getContext('2d'); // Get the 2D rendering context
+        let elements = []; // Array to hold all animated elements (hearts, photos, stars, and text)
+        let width, height; // Variables to store canvas dimensions
+        let staticPhotoPositions = []; // To store positions of static photos for collision detection
+        let availableStaticImages = []; // To keep track of images available for static photos
+
+        // --- Image Loading ---
+        // IMPORTANT: Replace these URLs with the actual paths to your 10 images.
+        const imageUrls = [
+            'luna1.jpg',
+            'luna2.jpg',
+            'luna3.jpg',
+            'luna4.jpg',
+            'luna5.jpg',
+            'luna6.jpg',
+            'luna7.jpg',
+            'luna8.jpg',
+            'luna9.jpg',
+            'luna10.jpg'
+        ];
+        const images = []; // Array to store loaded Image objects
+        let imagesLoaded = 0; // Counter for loaded images
+
+        // Define a palette of colors for the "Te amo infinitamente" text
+        const loveTextColors = [
+            '#FF69B4', // Hot Pink
+            '#FF1493', // Deep Pink
+            '#FFD700', // Gold
+            '#ADFF2F', // GreenYellow
+            '#8A2BE2', // BlueViolet
+            '#00CED1', // DarkTurquoise
+            '#FF4500', // OrangeRed
+            '#DA70D6', // Orchid
+            '#40E0D0', // Turquoise
+            '#FF6347'  // Tomato
+        ];
+
+        // --- Function to set canvas size based on window dimensions ---
+        function setCanvasSize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+
+        // --- Class to represent an animated Element (Heart, Photo, Star, or Text) ---
+        class Element {
+            /**
+             * @param {number} x - Initial x-coordinate.
+             * @param {number} y - Initial y-coordinate.
+             * @param {string} type - Type of element: 'float' (floating heart), 'rain' (falling heart), 'burst' (exploding heart), 'static-photo' (non-moving photo), 'star' (falling star), 'love-text' (interactive text), 'pulsing-heart' (heart that grows/shrinks).
+             * @param {number} [textOffset=0] - Vertical offset for love-text elements to create a list.
+             */
+            constructor(x, y, type = 'float', textOffset = 0) {
+                this.type = type;
+                this.textOffset = textOffset; // Used for vertical stacking of love-text
+                this.init(x, y); // Initialize element properties
+            }
+            
+            /**
+             * Initializes or re-initializes element properties based on its type.
+             * @param {number|null} x - Optional initial x-coordinate. If null, a random x is chosen.
+             * @param {number|null} y - Optional initial y-coordinate. If null, a random y is chosen based on type.
+             */
+            init(x = null, y = null) {
+                this.x = x; // Will be set specifically for static photos or randomly for others
+                this.life = null; // Life duration for 'burst' and 'love-text' type elements
+
+                // Define the exclusion zone for static photos (where "mi chikita bb" is)
+                // These values are approximate based on typical text size and centering
+                const exclusionZone = {
+                    x: width * 0.18, // Start 18% from left (slightly larger buffer)
+                    y: height * 0.38, // Start 38% from top (slightly larger buffer)
+                    width: width * 0.64, // 64% of width
+                    height: height * 0.24 // 24% of height
+                };
+
+                // Define a central placement zone for static photos, ensuring enough padding from edges
+                const placementZone = {
+                    x: width * 0.05, // Start 5% from left
+                    y: height * 0.05, // Start 5% from top
+                    width: width * 0.9, // 90% of width
+                    height: height * 0.9 // 90% of height
+                };
+
+                switch (this.type) {
+                    case 'static-photo': // This now covers all static images
+                        let placed = false;
+                        let attempts = 0;
+                        // Minimum clear space (buffer) between the edges of two images
+                        const minSeparationBuffer = 70; 
+                        const maxAttempts = 1500; // Increased max attempts for robust placement
+
+                        while (!placed && attempts < maxAttempts) {
+                            this.size = Math.random() * 80 + 120; // Larger size range for static photos (120-200px)
+                            
+                            // Calculate random coordinates for the center of the photo
+                            // ensuring the entire photo is within the placementZone AND canvas bounds
+                            const effectiveMinX = Math.max(placementZone.x + this.size / 2, this.size / 2);
+                            const effectiveMaxX = Math.min(placementZone.x + placementZone.width - this.size / 2, width - this.size / 2);
+                            const effectiveMinY = Math.max(placementZone.y + this.size / 2, this.size / 2);
+                            const effectiveMaxY = Math.min(placementZone.y + placementZone.height - this.size / 2, height - this.size / 2);
+
+                            let tempX, tempY;
+
+                            // Check if there's a valid range for placement
+                            if (effectiveMaxX <= effectiveMinX || effectiveMaxY <= effectiveMinY) {
+                                console.warn("Placement zone too small for current photo size, falling back to full canvas random placement.");
+                                // Fallback if the effective range is invalid, just place anywhere on canvas, ensuring it's not cut
+                                tempX = this.size / 2 + Math.random() * (width - this.size);
+                                tempY = this.size / 2 + Math.random() * (height - this.size);
+                            } else {
+                                tempX = effectiveMinX + Math.random() * (effectiveMaxX - effectiveMinX);
+                                tempY = effectiveMinY + Math.random() * (effectiveMaxY - effectiveMinY);
+                            }
+
+                            let overlapping = false;
+
+                            // Check for overlap with other static photos
+                            for (const existingPhoto of staticPhotoPositions) {
+                                const distanceBetweenCenters = Math.sqrt(
+                                    Math.pow(tempX - existingPhoto.x, 2) +
+                                    Math.pow(tempY - existingPhoto.y, 2)
+                                );
+                                // Calculate the minimum required distance between centers for no overlap + buffer
+                                const minDistanceForNoOverlap = (this.size / 2 + existingPhoto.size / 2 + minSeparationBuffer);
+                                
+                                if (distanceBetweenCenters < minDistanceForNoOverlap) {
+                                    overlapping = true;
+                                    break;
+                                }
+                            }
+
+                            // Check for overlap with the exclusion zone (text area)
+                            const photoLeft = tempX - this.size / 2;
+                            const photoRight = tempX + this.size / 2;
+                            const photoTop = tempY - this.size / 2;
+                            const photoBottom = tempY + this.size / 2;
+
+                            if (!(photoRight < exclusionZone.x || 
+                                  photoLeft > exclusionZone.x + exclusionZone.width ||
+                                  photoBottom < exclusionZone.y ||
+                                  photoTop > exclusionZone.y + exclusionZone.height)) {
+                                overlapping = true; // Overlaps with text area
+                            }
+
+                            if (!overlapping) {
+                                placed = true;
+                                this.x = tempX;
+                                this.y = tempY;
+                                staticPhotoPositions.push({ x: this.x, y: this.y, size: this.size });
+                            }
+                            attempts++;
+                        }
+
+                        if (!placed) {
+                            console.warn("No se pudo colocar la foto estática sin superposición o fuera del área de texto después de múltiples intentos. Colocando aleatoriamente, esto puede resultar en superposición.");
+                            // Fallback: place randomly, but still within bounds, might still overlap with other photos if space is too constrained
+                            this.size = Math.random() * 80 + 120;
+                            this.x = this.size / 2 + Math.random() * (width - this.size);
+                            this.y = this.size / 2 + Math.random() * (height - this.size);
+                            staticPhotoPositions.push({ x: this.x, y: this.y, size: this.size }); 
+                        }
+
+                        this.speedY = 0; // No vertical movement for static photos
+                        this.speedX = 0; // No horizontal movement for static photos
+                        this.angle = 0; // No rotation for static photos
+                        this.rotation = 0; // No rotation for static photos
+
+                        // Select a unique image for this static photo
+                        if (availableStaticImages.length > 0) {
+                            const randomIndex = Math.floor(Math.random() * availableStaticImages.length);
+                            this.image = availableStaticImages[randomIndex];
+                            availableStaticImages.splice(randomIndex, 1); // Remove the used image
+                        } else {
+                            // If all unique images are used, reuse images from the main 'images' array
+                            console.warn("Todas las imágenes únicas para fotos estáticas han sido utilizadas. Reutilizando imágenes.");
+                            this.image = images[Math.floor(Math.random() * images.length)];
+                        }
+                        break;
+                    case 'rain':
+                        this.x = x || Math.random() * width;
+                        this.y = y || -Math.random() * height;
+                        this.speedY = Math.random() * 2 + 1;
+                        this.speedX = 0;
+                        this.size = Math.random() * 25 + 10;
+                        this.color = `hsla(${Math.random() * 30 + 330}, 100%, 70%, ${Math.random() * 0.5 + 0.5})`;
+                        break;
+                    case 'burst':
+                        this.y = y;
+                        this.x = x;
+                        this.size = Math.random() * 30 + 15; // Larger initial size for burst hearts
+                        this.speedY = (Math.random() - 0.7) * 8; // Faster upward burst
+                        this.speedX = (Math.random() - 0.5) * 15; // Wider horizontal burst
+                        this.life = 60; // Shorter lifespan for quicker burst
+                        this.color = `hsla(${Math.random() * 30 + 330}, 100%, 70%, 1)`;
+                        this.initialAlpha = 1; // Start fully opaque
+                        break;
+                    case 'float':
+                        this.x = x || Math.random() * width;
+                        this.y = y || height + Math.random() * 100;
+                        this.speedY = -(Math.random() * 1.5 + 0.5);
+                        this.speedX = (Math.random() - 0.5) * 2;
+                        this.size = Math.random() * 25 + 10;
+                        this.color = `hsla(${Math.random() * 30 + 330}, 100%, 70%, ${Math.random() * 0.5 + 0.5})`;
+                        break;
+                    case 'star':
+                        this.x = x || Math.random() * width;
+                        this.y = y || -Math.random() * height;
+                        this.speedY = Math.random() * 1 + 0.5;
+                        this.speedX = (Math.random() - 0.5) * 0.5;
+                        this.size = Math.random() * 5 + 2;
+                        this.color = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.5})`;
+                        this.rotation = Math.random() * Math.PI * 2;
+                        this.rotationSpeed = (Math.random() - 0.5) * 0.01;
+                        this.currentAlpha = Math.random() * 0.5 + 0.5;
+                        this.alphaDirection = Math.random() > 0.5 ? 0.008 : -0.008; // Faster blinking
+                        break;
+                    case 'love-text':
+                        this.x = x;
+                        // Adjust y based on textOffset for list effect
+                        this.y = y - this.textOffset; 
+                        this.fullText = "Te amo infinitamente"; // Store full text
+                        this.animatedText = ""; // Text to be displayed, built letter by letter
+                        this.textIndex = 0; // Current index of the letter being revealed
+                        this.revealInterval = 2; // Even faster reveal: 2 frames per letter
+                        this.frameCounter = 0; // Counter for reveal interval
+
+                        this.life = 100; // Shorter lifespan for quicker fade
+                        this.currentAlpha = 1; // Starts fully opaque
+                        this.color = loveTextColors[Math.floor(Math.random() * loveTextColors.length)]; // Random color from original vibrant palette
+                        this.fontSize = Math.random() * 25 + 35; // Larger font size range
+                        this.speedY = -1.5 - (Math.random() * 0.5); // Consistent upward movement, slightly varied
+                        this.speedX = (Math.random() - 0.5) * 2; // Slight horizontal drift for dispersion
+                        this.initialScale = 1.2; // Start slightly larger
+                        this.scale = this.initialScale; // Current scale
+                        this.rotation = 0; // No rotation for love-text
+                        this.rotationSpeed = 0; // No rotation speed for love-text
+                        this.appearDuration = 20; // Frames for initial scaling down
+                        break;
+                    case 'pulsing-heart':
+                        this.x = x || Math.random() * width;
+                        this.y = y || Math.random() * height;
+                        this.baseSize = Math.random() * 30 + 20; // Base size for pulsing heart
+                        this.pulseFactor = Math.random() * 0.2 + 0.1; // How much it pulses
+                        this.pulseSpeed = Math.random() * 0.05 + 0.02; // Speed of pulsing
+                        this.pulseOffset = Math.random() * Math.PI * 2; // Starting point in pulse cycle
+                        this.color = `hsla(${Math.random() * 30 + 330}, 100%, 80%, ${Math.random() * 0.5 + 0.5})`; // Lighter pink for pulsing hearts
+                        this.size = this.baseSize; // Current size
+                        break;
+                    default:
+                        this.x = x || Math.random() * width;
+                        this.y = y || height + Math.random() * 100;
+                        this.speedY = -(Math.random() * 1.5 + 0.5);
+                        this.speedX = (Math.random() - 0.5) * 2;
+                        this.size = Math.random() * 25 + 10;
+                        this.color = `hsla(${Math.random() * 30 + 330}, 100%, 70%, ${Math.random() * 0.5 + 0.5})`;
+                        break;
+                }
+            }
+
+            /**
+             * Updates the position and other properties of the element for the next frame.
+             */
+            update() {
+                // Static photos do not move, so skip position update for them
+                if (this.type !== 'static-photo') {
+                    this.y += this.speedY; // Update vertical position
+                    this.x += this.speedX; // Update horizontal position
+                }
+                
+                if (this.type === 'star') { // Stars rotate and blink
+                    this.rotation += this.rotationSpeed; 
+                    this.currentAlpha += this.alphaDirection;
+                    if (this.currentAlpha > 1 || this.currentAlpha < 0.2) { // Blink between 0.2 and 1 opacity
+                        this.alphaDirection *= -1; // Reverse direction
+                    }
+                } else if (this.type === 'love-text') { // Love text fades, moves, and scales
+                    // Scale down during initial appearance phase
+                    if (this.life > (100 - this.appearDuration)) {
+                        const progress = (this.life - (100 - this.appearDuration)) / this.appearDuration;
+                        this.scale = 1.0 + (this.initialScale - 1.0) * progress; // Scale from initialScale to 1.0
+                    } else {
+                        this.scale = 1.0; // Maintain normal size after initial appearance
+                    }
+
+                    this.currentAlpha = this.life / 100; // Fade out based on remaining life
+                    // No rotation for love-text
+                
+                    // Reveal text letter by letter
+                    this.frameCounter++;
+                    if (this.frameCounter >= this.revealInterval && this.textIndex < this.fullText.length) {
+                        this.animatedText += this.fullText[this.textIndex];
+                        this.textIndex++;
+                        this.frameCounter = 0;
+                    }
+
+                } else if (this.type === 'pulsing-heart') { // Pulsing hearts animate their size
+                    this.size = this.baseSize * (1 + Math.sin(Date.now() * this.pulseSpeed + this.pulseOffset) * this.pulseFactor);
+                }
+
+                if (this.life !== null) { // For elements with a lifespan (burst, love-text)
+                    this.life--; // Decrement lifespan
+                    // Burst hearts shrink and fade
+                    if (this.type === 'burst') {
+                        this.size *= 0.95; // Gradually shrink
+                        this.currentAlpha = this.life / 60; // Fade out
+                    }
+                }
+                
+                // Reset element position if it goes off-screen (except for static photos and fading text)
+                if (this.type !== 'static-photo' && this.type !== 'love-text' && this.type !== 'pulsing-heart') { // Pulsing hearts don't reset
+                    if ((this.type === 'float' && this.y < -this.size) || // Floating heart goes too high
+                        ((this.type === 'rain' || this.type === 'star') && this.y > height + this.size)) { // Falling element goes too low
+                        this.init(); // Re-initialize the element to appear from the other side
+                    }
+                }
+            }
+
+            /**
+             * Draws the element on the canvas.
+             */
+            draw() {
+                if (this.size < 1 && this.type !== 'love-text') return; // Don't draw if element is too small (e.g., burst hearts fading out)
+                if (this.type === 'love-text' && this.currentAlpha <= 0 && this.textIndex >= this.fullText.length) return; // Don't draw if text is fully faded and fully revealed
+                if (this.type === 'burst' && this.currentAlpha <= 0) return; // Don't draw burst heart if fully faded
+
+                ctx.save(); // Save the current canvas state (transformations, etc.)
+
+                if (this.type === 'static-photo' && this.image) { // Only static-photo uses images
+                    // Draw image
+                    ctx.translate(this.x, this.y); // Move origin to element's center
+                    ctx.rotate(this.rotation); // Apply rotation
+                    ctx.globalAlpha = 0.85; // Set transparency for photos
+
+                    // Add subtle shadow and border to photos
+                    ctx.shadowBlur = 8; 
+                    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'; 
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'; 
+                    ctx.lineWidth = 2; 
+                    ctx.strokeRect(-this.size / 2, -this.size / 2, this.size, this.size); 
+                    
+                    ctx.drawImage(this.image, -this.size / 2, -this.size / 2, this.size, this.size);
+                } else if (this.type === 'star') {
+                    // Draw a star shape
+                    ctx.translate(this.x, this.y);
+                    ctx.rotate(this.rotation);
+                    ctx.beginPath();
+                    const numPoints = 5;
+                    const outerRadius = this.size / 2;
+                    const innerRadius = outerRadius / 2.5; // Adjust for star point sharpness
+
+                    for (let i = 0; i < numPoints * 2; i++) {
+                        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                        const angle = (Math.PI / numPoints) * i;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        if (i === 0) {
+                            ctx.moveTo(x, y);
+                        } else {
+                            ctx.lineTo(x, y);
+                        }
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = this.color;
+                    ctx.globalAlpha = this.currentAlpha; // Apply blinking alpha
+                    ctx.shadowBlur = 8; // More prominent glow for stars
+                    ctx.shadowColor = 'rgba(255, 255, 255, 1)'; // Brighter glow
+                    ctx.fill();
+                } else if (this.type === 'love-text') {
+                    ctx.translate(this.x, this.y); // Translate to text position
+                    // No rotation for love-text
+                    ctx.scale(this.scale, this.scale); // Apply scaling
+
+                    ctx.font = `${this.fontSize}px 'Playfair Display'`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    
+                    // Set up glow effect
+                    ctx.shadowBlur = 35; // Increased blur for more intense glow
+                    ctx.shadowColor = this.color; // Shadow matches text color for vibrant glow
+
+                    // Draw the text fill
+                    ctx.fillStyle = this.color;
+                    ctx.globalAlpha = this.currentAlpha; // Apply fading alpha
+                    ctx.fillText(this.animatedText, 0, 0); // Draw animatedText
+
+                    // Add a subtle white stroke for definition, fading with the text
+                    ctx.strokeStyle = 'rgba(255, 255, 255, ' + (this.currentAlpha * 0.9) + ')'; // White stroke, also fades, slightly more opaque
+                    ctx.lineWidth = 2; // Slightly thicker stroke
+                    ctx.strokeText(this.animatedText, 0, 0);
+                } else { // Hearts (float, rain, burst, pulsing-heart)
+                    ctx.beginPath();
+                    // Define heart shape using bezier curves
+                    ctx.moveTo(this.x, this.y - this.size / 3);
+                    ctx.bezierCurveTo(this.x + this.size / 2, this.y - this.size, this.x + this.size, this.y, this.x, this.y + this.size);
+                    ctx.bezierCurveTo(this.x - this.size, this.y, this.x - this.size / 2, this.y - this.size, this.x, this.y - this.size / 3);
+                    ctx.fillStyle = this.color; // Set heart color
+
+                    // Add subtle glow to hearts
+                    ctx.shadowBlur = 25; // Increased blur for a more vibrant glow
+                    ctx.shadowColor = this.color; // Shadow matches heart color for vibrancy
+                    if (this.type === 'burst') {
+                        ctx.globalAlpha = this.currentAlpha; // Apply fading alpha for burst hearts
+                    } else if (this.type === 'pulsing-heart') {
+                        // Pulsing hearts have their own opacity based on their color
+                    } else {
+                        ctx.globalAlpha = 1; // Ensure other hearts are fully opaque
+                    }
+
+                    ctx.fill(); // Fill the heart shape
+                }
+                ctx.restore(); // Restore the canvas state (resets globalAlpha, shadow, etc.)
+            }
+        }
+
+        /**
+         * Initializes the scene by setting canvas size and populating the elements array.
+         */
+        function initializeScene() {
+            setCanvasSize(); // Set canvas dimensions
+            elements = []; // Clear existing elements
+            staticPhotoPositions = []; // Reset static positions on scene re-initialization
+            
+            // Populate availableStaticImages with a copy of all loaded images
+            availableStaticImages = [...images]; 
+
+            // Add floating hearts
+            for (let i = 0; i < 25; i++) {
+                elements.push(new Element(null, null, 'float'));
+            }
+            // Add falling hearts
+            for (let i = 0; i < 40; i++) {
+                elements.push(new Element(null, null, 'rain'));
+            }
+            // Add pulsing hearts
+            for (let i = 0; i < 10; i++) { // Adding 10 pulsing hearts
+                elements.push(new Element(null, null, 'pulsing-heart'));
+            }
+            // Add falling stars for the background
+            for (let i = 0; i < 150; i++) { // Increased number of stars for a denser effect
+                elements.push(new Element(null, null, 'star'));
+            }
+
+            // Add static photos with separation logic and unique images
+            // All 10 images are now used as static photos, plus 5 additional, for a total of 15 if available
+            const totalStaticPhotos = Math.min(15, images.length); 
+            for (let i = 0; i < totalStaticPhotos; i++) { 
+                elements.push(new Element(null, null, 'static-photo'));
+            }
+        }
+
+        /**
+         * The main animation loop. Clears the canvas, updates, and draws all elements.
+         */
+        function animate() {
+            // Clear the canvas completely with a solid black background
+            ctx.fillStyle = '#1a1a2e'; 
+            ctx.fillRect(0, 0, width, height);
+
+            // Iterate through elements in reverse to safely remove 'burst' elements and faded text
+            for (let i = elements.length - 1; i >= 0; i--) {
+                const el = elements[i];
+                el.update(); // Update element's position and state
+                el.draw();   // Draw the element
+                // Remove 'burst' elements once their lifespan is over or love-text when fully faded and animated
+                if ((el.type === 'burst' && el.life <= 0) || 
+                    (el.type === 'love-text' && el.currentAlpha <= 0 && el.textIndex >= el.fullText.length)) {
+                    elements.splice(i, 1);
+                }
+            }
+            requestAnimationFrame(animate); // Request the next animation frame
+        }
+
+        /**
+         * Preloads all images specified in imageUrls.
+         * Calls a callback function once all images are loaded or failed.
+         * @param {function} callback - Function to call after all images are processed.
+         */
+        function preloadImages(callback) {
+            if (imageUrls.length === 0) {
+                callback(); // If no images, just call callback
+                return;
+            }
+            imageUrls.forEach(src => {
+                const img = new Image();
+                img.src = src;
+                // Handle image loading errors
+                img.onerror = () => {
+                    console.error(`No se pudo cargar la imagen: ${src}`);
+                    imagesLoaded++;
+                    if (imagesLoaded === imageUrls.length) callback(); // Call callback even if some images fail
+                };
+                // Handle successful image loading
+                img.onload = () => {
+                    imagesLoaded++;
+                    images.push(img); // Add loaded image to the images array
+                    if (imagesLoaded === imageUrls.length) callback(); // Call callback when all are loaded
+                };
+            });
+        }
+
+        // --- Event Listeners ---
+        // Re-initialize the scene when the window is resized to adjust canvas dimensions
+        window.addEventListener('resize', initializeScene);
+
+        /**
+         * Creates a burst of hearts and a "Te amo infinitamente" text at the click/touch coordinates.
+         * @param {MouseEvent|TouchEvent} e - The event object.
+         */
+        function createBurst(e) {
+            // Get click/touch coordinates, handling both mouse and touch events
+            const x = e.clientX || e.touches[0].clientX;
+            const y = e.clientY || e.touches[0].clientY;
+            
+            // Add 20 'burst' type hearts at the clicked/touched location
+            for (let i = 0; i < 20; i++) {
+                elements.push(new Element(x, y, 'burst'));
+            }
+
+            // Add multiple "Te amo infinitamente" text elements in a list form
+            const numLoveTexts = 4; // Number of text elements to create on each touch
+            const textLineHeight = 45; // Approximate height for each text line (font size + spacing)
+            for (let i = 0; i < numLoveTexts; i++) {
+                // Offset each text vertically to create a list effect
+                elements.push(new Element(x, y, 'love-text', i * textLineHeight));
+            }
+        }
+        // Add event listeners for mouse clicks and touch starts
+        window.addEventListener('click', createBurst);
+        window.addEventListener('touchstart', createBurst);
+
+        // --- Start the animation ---
+        // Preload images first, then initialize the scene and start the animation loop
+        preloadImages(() => {
+            initializeScene(); // Setup initial elements and canvas size
+            animate(); // Start the animation loop
+        });
+    </script>
+</body>
+</html>
